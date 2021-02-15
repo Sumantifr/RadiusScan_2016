@@ -1,0 +1,742 @@
+using namespace edm;
+  Nevt++;
+
+  irun = iEvent.id().run();
+  ilumi = iEvent.luminosityBlock();
+  
+  ievt = iEvent.id().event();
+
+  if (isMC) {
+	  
+	bool lhe_pdf = false;
+	  
+	#ifdef LHAPDF
+    edm::Handle<LHEEventProduct> EvtHandle ;
+    iEvent.getByToken( lheEventProductToken_ , EvtHandle ) ;
+		
+		if(EvtHandle.isValid()){
+			lhe_pdf = true;
+			if(lhe_pdf){
+		for ( unsigned int weightIndex = 0; weightIndex < EvtHandle->weights().size(); ++weightIndex ) {
+			if (weightIndex>=9 && weightIndex<=109) {
+				pdfwt[weightIndex-9] = EvtHandle->weights()[weightIndex].wgt/EvtHandle->originalXWGTUP(); 
+				}
+			}
+		}
+			
+	}
+	
+	#elif defined(GenPDF)
+
+		 if(!(lhe_pdf)){	 
+			 edm::Handle<GenEventInfoProduct> GenHandle;
+			 iEvent.getByToken(GenEventProductToken_,GenHandle);
+			 if(GenHandle.isValid()){
+				 const std::vector<double>& genweights = GenHandle->weights();
+				 for ( unsigned int weightIndex = 0; weightIndex < GenHandle->weights().size(); ++weightIndex ) {
+						if (weightIndex>=10 && weightIndex<=110) {
+						pdfwt[weightIndex-10] = genweights[weightIndex]*1./genweights[10]; 
+					}
+				 }
+			 }
+		}
+	
+	#endif
+	  	  
+	wtfact = 1. ;
+
+    edm::Handle<GenEventInfoProduct>eventinfo ;
+    
+    iEvent.getByToken(tok_wt_,eventinfo) ;
+    
+    if (eventinfo.isValid()){
+      wtfact = weight2*eventinfo->weight();
+      event_weight = eventinfo->weight();
+      pthat = eventinfo->qScale();
+    } 
+  } //isMC 
+
+  for (int ij=0; ij<nHLTmx; ij++) { 
+	  weighttrg[ij] = 1.0;
+	  }
+
+//  cout<<"Event "<<Nevt+1<<" Run no "<<iEvent.run()<<" LS "<<iEvent.luminosityBlock()<<" event no "<<iEvent.id().event()<<endl;
+ 
+  Handle<double> Rho_PF;
+  
+  iEvent.getByToken(tok_Rho_,Rho_PF);
+  Rho = *Rho_PF;
+ 
+  const char* variab1;
+   
+  edm::Handle<edm::TriggerResults> trigRes;
+  iEvent.getByToken(triggerBits_, trigRes);
+  
+  const edm::TriggerNames &names = iEvent.triggerNames(*trigRes);
+
+  edm::Handle<pat::TriggerObjectStandAloneCollection> triggerObjects;
+  iEvent.getByToken(triggerObjects_, triggerObjects);
+  
+  edm::Handle<pat::PackedTriggerPrescales> triggerPrescales;
+  iEvent.getByToken(triggerPrescales_, triggerPrescales);
+  
+  //Calcualte Trigger Efficiency;
+  
+  int ihlttrg[nHLTmx+1]= {0,0,0,0,0,0,0,0,0,0,0};
+
+  for (int jk=0; jk<nHLTmx; jk++) {
+    for(unsigned ij = 0; ij<trigRes->size(); ++ij) {
+      std::string name = names.triggerName(ij);
+      variab1 = name.c_str(); 
+      
+       if (strstr(variab1,jethlt_name[jk]) && ((strlen(variab1)-strlen(jethlt_name[jk]))<3))
+        {
+		if ((trigRes->accept(ij))||(isMC)) {
+			ihlttrg[jk] = ihlttrg[nHLTmx] = 1;
+			}
+        }
+     }//ij 
+    }//jk
+    
+  if (isData) {
+    if (ihlttrg[nHLTmx]>0){
+			wtfact = 1.0;///compres[ihlt];
+		  } else { return ; } 
+		}
+   
+   trig_value = 1;
+
+  for (int jk=1; jk<(nHLTmx+1); jk++) {
+	  if(ihlttrg[nHLTmx-jk]>0) {
+		  trig_value+=(1<<jk);
+		  }
+  }
+   
+   for (int ij=0; ij<nHLTmx; ij++) {
+    weighttrg[ij] = wtfact;
+    if (isData) { weighttrg[ij] *= (compres[ij]*ihlttrg[ij]);}
+		}//ij
+
+  if (isMC) { 
+	  
+    edm::Handle<std::vector<PileupSummaryInfo> > PupInfo;
+    iEvent.getByToken(pileup_, PupInfo);
+    int npu = -1;
+    if (PupInfo.isValid()) {
+      std::vector<PileupSummaryInfo>::const_iterator PVI;
+      for(PVI = PupInfo->begin(); PVI != PupInfo->end(); ++PVI) {
+		if (PVI->getBunchCrossing()==0) {
+			npu = PVI->getPU_NumInteractions();
+			break;
+		}
+      }
+    }
+
+    npu_vert = npu;
+
+   event_weight*=rat_pileup[0][npu];
+
+    }//isMC
+   else {  if(ihlttrg[nHLTmx]==0) { return; } }
+   
+ 
+  Handle<VertexCollection> primaryVertices;
+  
+  iEvent.getByToken(tok_primaryVertices_, primaryVertices); 
+
+  if (primaryVertices.isValid()) {
+    int ndofct_org=0;
+    int nchict_org=0;
+    int nvert_org = 0;
+    for (reco::VertexCollection::const_iterator vert=primaryVertices->begin(); vert<primaryVertices->end(); vert++) {
+      nvert_org++;
+      if (vert->isValid() && !vert->isFake()) {
+	if (vert->ndof()>7) { 
+	  ndofct_org++;
+	  if (vert->normalizedChi2()<5) nchict_org++;
+		}
+      }
+    }
+    
+    nprim = min(99,nvert_org) + 100*min(99,ndofct_org) + 10000*min(99,nchict_org);
+    
+    nvert = nvert_org;
+    ndofct = ndofct_org;
+    nchict = nchict_org;  
+    
+   }
+
+  edm::Handle<edm::View<pat::Jet>/*reco::PFJetCollection*/> PFJets[nalgo];
+  edm::Handle<reco::GenJetCollection> GenJets[nalgo];
+
+  vector<double> recojetptx[nalgo][njecmcmx];
+  vector<double> recojetscl[nalgo][njecmcmx];
+  vector<double> recojetsjer[nalgo][njecmcmx];
+  vector<double> recojetrjer[nalgo][njecmcmx];
+  vector<int> recojetindx[nalgo][njecmcmx];
+  vector<int> recojetgenid[nalgo][njecmcmx];
+  vector<double> recojetjecL1[nalgo][njecmcmx];
+  vector<double> recojetjecL2[nalgo][njecmcmx];
+  vector<double> recojetjecL2L3[nalgo][njecmcmx];
+  vector<double> recojetjec[nalgo][njecmcmx];
+
+	for(int ix=0; ix<nalgo; ix++){
+	
+	iEvent.getByToken(tok_pfjets_[ix], PFJets[ix]);
+	iEvent.getByToken(tok_genjets_[ix], GenJets[ix]);
+	
+	for (unsigned jet = 0; jet<PFJets[ix]->size(); jet++) {
+	  
+	  HepLorentzVector pfjet4v((*PFJets[ix])[jet].px(),(*PFJets[ix])[jet].py(),(*PFJets[ix])[jet].pz(), (*PFJets[ix])[jet].energy());
+	 
+	  double tmprecpt = pfjet4v.perp();
+	  double tmpreceta = pfjet4v.eta();
+	  double tmprecphi = pfjet4v.phi();
+	  double tmprecarea = (*PFJets[ix])[jet].jetArea();	
+ 
+	  double total_cor = 1. ;
+	  double corL1 = 1.;
+	  double corL2 = 1.;
+	  double corL2L3 = 1.;
+	
+	  if(ix<=5){
+	  
+	  jecL1FastAK4->setJetPt(tmprecpt); 
+	  jecL1FastAK4->setJetA(tmprecarea);
+	  jecL1FastAK4->setRho(*Rho_PF);
+          jecL1FastAK4->setJetEta(tmpreceta);
+      
+      double corFactorL1Fast = jecL1FastAK4->getCorrection();
+      total_cor *= corFactorL1Fast;
+      tmprecpt = tmprecpt * corFactorL1Fast;
+      corL1 = corL1 * corFactorL1Fast;
+      
+      jecL2RelativeAK4->setJetPt(tmprecpt);
+      jecL2RelativeAK4->setJetEta(tmpreceta);
+      
+      double corFactorL2Relative = jecL2RelativeAK4->getCorrection();
+      total_cor *= corFactorL2Relative ;
+      tmprecpt = tmprecpt * corFactorL2Relative;   
+      corL2 = corL2 * corFactorL2Relative;
+      
+      jecL3AbsoluteAK4->setJetPt(tmprecpt); 
+      jecL3AbsoluteAK4->setJetEta(tmpreceta);
+	  
+	  double corFactorL3Absolute = jecL3AbsoluteAK4->getCorrection();
+	  total_cor*= corFactorL3Absolute ;
+	  tmprecpt = tmprecpt * corFactorL3Absolute;
+	
+	  if(isData){
+		  double corFactorL2L3Residual;
+		  
+		  jecL2L3ResidualAK4->setJetPt(tmprecpt);
+		  jecL2L3ResidualAK4->setJetEta(tmpreceta);
+    
+		  corFactorL2L3Residual = jecL2L3ResidualAK4->getCorrection();
+		  total_cor*= corFactorL2L3Residual;
+  	          tmprecpt *=corFactorL2L3Residual;
+  	          corL2L3 = corL2L3 * corFactorL2L3Residual;
+			}
+
+	  	}//ix<=5
+	  	else{
+         		        jecL1FastAK8->setJetPt(tmprecpt); 
+				jecL1FastAK8->setJetA(tmprecarea);
+				jecL1FastAK8->setRho(*Rho_PF);
+				jecL1FastAK8->setJetEta(tmpreceta);
+      
+				double corFactorL1Fast = jecL1FastAK8->getCorrection();
+				total_cor*= corFactorL1Fast;
+				tmprecpt = tmprecpt * corFactorL1Fast;
+			        corL1 = corL1 * corFactorL1Fast;
+			
+				jecL2RelativeAK8->setJetPt(tmprecpt);
+				jecL2RelativeAK8->setJetEta(tmpreceta);
+      
+				double corFactorL2Relative = jecL2RelativeAK8->getCorrection();
+				total_cor*= corFactorL2Relative ;
+				tmprecpt = tmprecpt * corFactorL2Relative;
+				corL2 = corL2 * corFactorL2Relative;
+			
+				jecL3AbsoluteAK8->setJetPt(tmprecpt); 
+				jecL3AbsoluteAK8->setJetEta(tmpreceta);
+	  
+				double corFactorL3Absolute = jecL3AbsoluteAK8->getCorrection();
+				total_cor*= corFactorL3Absolute ;
+				tmprecpt = tmprecpt * corFactorL3Absolute;
+			
+				if(isData){
+				double corFactorL2L3Residual;
+		  
+				jecL2L3ResidualAK8->setJetPt(tmprecpt);
+				jecL2L3ResidualAK8->setJetEta(tmpreceta); 
+    
+				corFactorL2L3Residual = jecL2L3ResidualAK8->getCorrection();
+				total_cor*= corFactorL2L3Residual;
+				tmprecpt *=corFactorL2L3Residual;
+				corL2L3 = corL2L3 * corFactorL2L3Residual;
+			
+				}
+			}//else  
+	  	  
+	  double gausreso[njecmcmx] = {0};	  
+	
+	  for(int isrc =0 ; isrc<njecmcmx; isrc++){
+		  
+		  double sup = 1.0 ;
+		  
+		  #ifdef JETEnergyScale
+		  
+		  if((isrc>0)&&(isrc<=nsrc)){
+				JetCorrectionUncertainty *jecUnc = vsrc[isrc-1];
+				jecUnc->setJetEta(tmpreceta);
+				jecUnc->setJetPt(tmprecpt);
+	
+				sup += jecUnc->getUncertainty(true);
+			}
+			else if(isrc>nsrc){
+				JetCorrectionUncertainty *jecUnc = vsrc[isrc-1-nsrc];
+				jecUnc->setJetEta(tmpreceta);
+				jecUnc->setJetPt(tmprecpt);
+	
+				sup -= jecUnc->getUncertainty(false);
+				}
+		 
+		 #elif defined(JETRESO)	
+
+			JME::JetResolution resolution;
+		
+			if(ix<=5){	resolution = JME::JetResolution(mPtResoFileAK4.c_str()); } 		// resolution file 
+				else {	resolution = JME::JetResolution(mPtResoFileAK8.c_str()); }
+	  
+				JME::JetResolutionScaleFactor res_sf;
+		
+			if(ix<=5){	 res_sf = JME::JetResolutionScaleFactor(mPtSFFileAK4.c_str()); }	//scale factor file
+				else  {  res_sf = JME::JetResolutionScaleFactor(mPtSFFileAK8.c_str());}
+      
+				double reso = 1 ;
+		 
+				JME::JetParameters parameters_5 = {{JME::Binning::JetPt, tmprecpt}, {JME::Binning::JetEta, tmpreceta}, {JME::Binning::Rho, *Rho_PF}};
+				double rp = resolution.getResolution(parameters_5);
+				double sf = res_sf.getScaleFactor({{JME::Binning::JetEta, tmpreceta}}, Variation::NOMINAL);
+				double sf_up= res_sf.getScaleFactor({{JME::Binning::JetEta, tmpreceta}}, Variation::UP);
+				double sf_dn= res_sf.getScaleFactor({{JME::Binning::JetEta, tmpreceta}}, Variation::DOWN);
+		 
+		        bool match = false;
+		        int match_gen = -1;
+		        
+		        for (unsigned get = 0; get<(GenJets[ix]->size()); get++) {
+				HepLorentzVector genjet4v((*GenJets[ix])[get].px(),(*GenJets[ix])[get].py(),(*GenJets[ix])[get].pz(), (*GenJets[ix])[get].energy());
+				if((delta2R(tmpreceta,tmprecphi,genjet4v.eta(),genjet4v.phi()) < (0.5*jetsize[ix])) &&(fabs(tmprecpt-genjet4v.perp())<(3*fabs(rp)*tmprecpt))){
+					match = true;
+					match_gen = get;
+					break;
+					}
+				}
+				
+				if(match && (match_gen>=0)){
+					if(isrc==0) { reso = (sf-1.)*(tmprecpt-(*GenJets[ix])[match_gen].pt())*1./tmprecpt;}
+					else if(isrc==1){ reso = (sf_up-1.)*(tmprecpt-(*GenJets[ix])[match_gen].pt())*1./tmprecpt;}
+					else if(isrc==2){ reso = (sf_dn-1.)*(tmprecpt-(*GenJets[ix])[match_gen].pt())*1./tmprecpt;}
+					}
+		        else{
+				if(isrc==0) { gausreso[isrc] = gRandom->Gaus(0.,rp); }
+				else { gausreso[isrc] = gausreso[0]; }
+				if(isrc==0) { reso = sqrt(max(0.,(sf*sf-1))) * gausreso[isrc]; }
+				else if(isrc==1) {reso = sqrt(max(0.,(sf_up*sf_up-1))) * gausreso[isrc]; }
+				else if(isrc==2) {reso = sqrt(max(0.,(sf_dn*sf_dn-1))) * gausreso[isrc]; }	
+			    }
+			    
+			    sup = 1.+reso;
+		 /*
+				if(isrc==0) { reso = sqrt(max(0.,(sf*sf-1))*rp);}
+				else if(isrc==1) {reso = sqrt(max(0.,(sf_up*sf_up-1))*rp);}
+				else if(isrc==2) {reso = sqrt(max(0.,(sf_dn*sf_dn-1))*rp);}	
+			
+				sup = gRandom->Gaus(1.0, reso);	
+		*/		
+		 	    #endif
+				
+				if((total_cor<1.e-7)||(total_cor>1.e3)){total_cor = 1.;}
+				
+				recojetptx[ix][isrc].push_back(sup*tmprecpt);
+//				recojetscl[ix][isrc].push_back(sup*total_cor);
+				recojetscl[ix][isrc].push_back(sup);
+				recojetsjer[ix][isrc].push_back(sf);
+				recojetrjer[ix][isrc].push_back(rp);
+				recojetgenid[ix][isrc].push_back(match_gen);
+				recojetindx[ix][isrc].push_back(jet);
+				recojetjec[ix][isrc].push_back(total_cor);
+				recojetjecL1[ix][isrc].push_back(corL1);
+				recojetjecL2[ix][isrc].push_back(corL2);
+				recojetjecL2L3[ix][isrc].push_back(corL2L3);
+		  
+			} // loop over isrc
+		} // loop over jet no
+	} // loop over ix
+	
+	// now shuffle 
+	
+	for(int ix=0 ; ix<nalgo; ix++) { 
+	    for (int isrc = 0; isrc < njecmcmx; isrc++) {
+	 	if(recojetptx[ix][isrc].size()>1) { 
+		for (unsigned int ij=0; ij<recojetptx[ix][isrc].size()-1; ij++) {
+			for (unsigned int jk=ij+1; jk<recojetptx[ix][isrc].size(); jk++) {
+				
+				if (recojetptx[ix][isrc][jk]>recojetptx[ix][isrc][ij]) {
+					
+					double tmppt = recojetptx[ix][isrc][ij];
+					double tmpscl = recojetscl[ix][isrc][ij];
+					double tmpsf = recojetsjer[ix][isrc][ij];
+					double tmprp = recojetrjer[ix][isrc][ij];
+					double tmpjec = recojetjec[ix][isrc][ij];
+					double tmpL1 = recojetjecL1[ix][isrc][ij];
+					double tmpL2 = recojetjecL2[ix][isrc][ij];
+					double tmpL2L3 = recojetjecL2L3[ix][isrc][ij];
+					int tmpindx = recojetindx[ix][isrc][ij];
+					int tmpgid = recojetgenid[ix][isrc][ij];
+
+					recojetptx[ix][isrc][ij] = recojetptx[ix][isrc][jk];
+					recojetscl[ix][isrc][ij] = recojetscl[ix][isrc][jk];
+					recojetsjer[ix][isrc][ij] = recojetsjer[ix][isrc][jk];
+					recojetrjer[ix][isrc][ij] = recojetrjer[ix][isrc][jk];
+					recojetjec[ix][isrc][ij] = recojetjec[ix][isrc][jk];
+					recojetjecL1[ix][isrc][ij] = recojetjecL1[ix][isrc][jk];
+					recojetjecL2[ix][isrc][ij] = recojetjecL2[ix][isrc][jk];
+					recojetjecL2L3[ix][isrc][ij] = recojetjecL2L3[ix][isrc][jk];
+					recojetindx[ix][isrc][ij] = recojetindx[ix][isrc][jk];		
+					recojetgenid[ix][isrc][ij] = recojetgenid[ix][isrc][jk];				
+		
+					recojetptx[ix][isrc][jk] = tmppt;
+					recojetscl[ix][isrc][jk] = tmpscl;
+					recojetsjer[ix][isrc][jk] = tmpsf;
+					recojetrjer[ix][isrc][jk] = tmprp ;
+					recojetjec[ix][isrc][jk] = tmpjec;
+					recojetjecL1[ix][isrc][jk] = tmpL1;
+					recojetjecL2[ix][isrc][jk] = tmpL2;
+					recojetjecL2L3[ix][isrc][jk] = tmpL2L3;
+					recojetindx[ix][isrc][jk] = tmpindx;
+					recojetgenid[ix][isrc][jk] = tmpgid;
+				  }
+			  } //jk
+		  } //ij
+	 	}
+   	} // nsrc	
+ }// loop over ix (algo no)
+
+//if(recojetptx[7][0].size()==0) return ;
+  
+  edm::Handle<pat::METCollection> pfmet_ ; 
+//  edm::Handle<reco::PFMETCollection> pfmet_ ;
+  iEvent.getByToken(tok_mets_,pfmet_) ;
+  
+  miset = misphi = -1000 ;
+  
+  if(pfmet_.isValid()){
+	  miset = pfmet_->begin()->corPt();
+	  misphi = pfmet_->begin()->corPhi(); 
+	  sumEt = pfmet_->begin()->corSumEt() ; 
+	  if(sumEt<1.) { sumEt = 1.; } 
+	  }
+	
+//  if((miset*1.0/sumEt)>0.3) return ;
+
+  for(int ix=0 ; ix<nalgo ; ix++) {
+	 
+    npfjets[ix] = 0;
+    
+    int tmpptbin = -1;
+ 
+    if(PFJets[ix].isValid()) {
+
+      for (unsigned jet1 = 0; jet1<PFJets[ix]->size(); jet1++) {
+
+        int jet = recojetindx[ix][0][jet1];
+
+	HepLorentzVector jet4v((*PFJets[ix])[jet].px(),(*PFJets[ix])[jet].py(),(*PFJets[ix])[jet].pz(), (*PFJets[ix])[jet].energy());
+	jet4v *= recojetjec[ix][0][jet1] ;
+
+	double jec_factor = recojetjec[ix][0][jet1];
+	double jec_L1 = recojetjecL1[ix][0][jet1];
+	
+        double tmppt = jet4v.perp();
+        double tmpeta = jet4v.eta();
+        double tmpy = jet4v.rapidity();
+
+
+	if (abs(tmpy)>maxEta || tmppt<minPFPt) continue;
+  
+	//Jet ID =================
+	double NHF = (*PFJets[ix])[jet].neutralHadronEnergyFraction();
+	double NEMF = (*PFJets[ix])[jet].neutralEmEnergyFraction();
+	double CHF = (*PFJets[ix])[jet].chargedHadronEnergyFraction();
+	double CEMF = (*PFJets[ix])[jet].chargedEmEnergyFraction();
+	double MUF = (*PFJets[ix])[jet].muonEnergyFraction();
+	double PHF = (*PFJets[ix])[jet].photonEnergyFraction();
+	int NumConst = (*PFJets[ix])[jet].chargedMultiplicity()+(*PFJets[ix])[jet].neutralMultiplicity();
+	int NumNeutralParticles =(*PFJets[ix])[jet].neutralMultiplicity();
+	int CHM = (*PFJets[ix])[jet].chargedHadronMultiplicity();
+	int NHM = (*PFJets[ix])[jet].neutralHadronMultiplicity();
+	int MUM = (*PFJets[ix])[jet].muonMultiplicity();
+	int PHM = (*PFJets[ix])[jet].photonMultiplicity();
+	int CEMM =(*PFJets[ix])[jet].chargedMultiplicity()-(*PFJets[ix])[jet].chargedHadronMultiplicity()-(*PFJets[ix])[jet].muonMultiplicity();
+	int NEMM =(*PFJets[ix])[jet].neutralMultiplicity()-(*PFJets[ix])[jet].neutralHadronMultiplicity();
+
+	bool looseJetID = false;
+	bool tightJetID =false;
+//	bool tightlepVeto = false;
+	
+	if(abs(tmpeta)<=2.7){
+		if( (NHF<0.90 && NEMF<0.90 && NumConst>1) && ((abs(tmpeta)<=2.4 && CHF>0 && CHM>0 && CEMF<0.99) || (abs(tmpeta)>2.4)) ){
+			tightJetID = true;
+			}
+		if( (NHF<0.99 && NEMF<0.99 && NumConst>1) && ((abs(tmpeta)<=2.4 && CHF>0 && CHM>0 && CEMF<0.99) || (abs(tmpeta)>2.4)) && (abs(tmpeta)<=2.7) ){
+			looseJetID = true;
+			}
+	//	if( (NHF<0.90 && NEMF<0.90 && NumConst>1 && MUF<0.8) && ((abs(tmpeta)<=2.4 && CHF>0 && CHM>0 && CEMF<0.9) || (abs(tmpeta)>2.4)) && (abs(tmpeta)<=2.7) ){
+	//		tightlepVeto = true;
+	//		}		
+		}
+		else{
+			if((abs(tmpeta)>2.7)&&(abs(tmpeta)<3.0)){
+				#ifdef Data2015 
+				 if( (NEMF<0.90) && (NumNeutralParticles>2)){tightJetID = true; looseJetID = true; } 
+				#elif defined(Data2016)   
+				if( (NEMF>0.01) && (NHF<0.98) && (NumNeutralParticles>2)){tightJetID = true; looseJetID = true;} 
+				#endif
+				}
+				else{
+					 if ((NEMF<0.90)/* && (NumNeutralParticles>10)*/){tightJetID = true; looseJetID = true;}
+					}
+	            }
+	
+	if(jet1==0) { 
+			iRecoPTbin[ix] = getbinid(recojetptx[ix][0][0], nHLTmx, leadingPtThreshold); 
+			if((iRecoPTbin[ix]<0)||(iRecoPTbin[ix]>=nHLTmx)/*||(ihlttrg[iRecoPTbin[ix]]==0)*/) break;
+			trig_weight[ix] = weighttrg[iRecoPTbin[ix]];	
+	 }
+	
+	pfjetmom[ix][npfjets[ix]] = jet4v.rho();
+	pfjetpT[ix][npfjets[ix]] = jet4v.perp();
+	pfjetenr[ix][npfjets[ix]] = jet4v.e();
+	pfjetthe[ix][npfjets[ix]] = jet4v.theta();
+	pfjety[ix][npfjets[ix]] = jet4v.rapidity();
+	pfjetphi[ix][npfjets[ix]]= jet4v.phi();
+	pfjetpz[ix][npfjets[ix]] = jet4v.pz();
+	pfjetarea[ix][npfjets[ix]] = (*PFJets[ix])[jet].jetArea() ;  
+
+	pfjettightID[ix][npfjets[ix]] = tightJetID;
+	pfjetlooseID[ix][npfjets[ix]] = looseJetID;
+        pfjetJEC[ix][npfjets[ix]] = jec_factor;
+        pfjetJECL1[ix][npfjets[ix]] = jec_L1;
+	pfjetJECL2[ix][npfjets[ix]] = recojetjecL2[ix][0][jet1];
+	pfjetJECL2L3[ix][npfjets[ix]] = recojetjecL2L3[ix][0][jet1];
+	
+	pfjetCHF[ix][npfjets[ix]] = CHF;
+	pfjetNHF[ix][npfjets[ix]] = NHF;
+	pfjetCHM[ix][npfjets[ix]] = CHM;
+	pfjetNEMF[ix][npfjets[ix]] = NEMF;
+	pfjettotnum[ix][npfjets[ix]] =  NumConst;
+	pfjetneunum[ix][npfjets[ix]] =  NumNeutralParticles;
+
+	float jetmoment = 0;
+	std::vector<reco::CandidatePtr> daught((*PFJets[ix])[jet].daughterPtrVector());
+    std::sort(daught.begin(), daught.end(), [](const reco::CandidatePtr &p1, const reco::CandidatePtr &p2)
+    { return p1->pt() > p2->pt(); });
+    for (unsigned int i2 = 0; i2< daught.size(); ++i2) {
+		jetmoment +=  (daught[i2])->pt() * delta2R((*daught[i2]).rapidity(), (*daught[i2]).phi(), pfjety[ix][npfjets[ix]], pfjetphi[ix][npfjets[ix]]);
+	}
+	pfjetwidth[ix][npfjets[ix]] = jetmoment*1./pfjetpT[ix][npfjets[ix]];
+	
+	bool leadpass = false;
+	if(pfjettightID[ix][0]==true) { leadpass = true; }
+
+	//if(ix==3){ cout<<"jet "<<npfjets[ix]+1<<" ihlttrg "<<ihlttrg[iRecoPTbin[ix]]<<endl;  }
+	
+	if(tightJetID && leadpass && (ihlttrg[iRecoPTbin[ix]]==1)){
+	for(int isrc=0; isrc<njecmcmx; isrc++){
+		int etatag = getbinid(abs(pfjety[ix][npfjets[ix]]),netarange,etarng);
+		if(etatag>=0){
+	//	Jetpt[ix][etatag][isrc]->Fill(recojetptx[ix][isrc][npfjets[ix]],trig_weight[ix]);
+		Jetpt[ix][etatag][isrc]->Fill(recojetptx[ix][isrc][jet1],trig_weight[ix]);
+				}
+			}
+		}
+	
+	if(isMC){
+	pfjetpTup[ix][npfjets[ix]] = recojetptx[ix][1][jet1] ;
+	pfjetpTdn[ix][npfjets[ix]] = recojetptx[ix][2][jet1] ;
+	
+	pfjetSF[ix][npfjets[ix]] = recojetscl[ix][0][jet1] ;
+	pfjetSFup[ix][npfjets[ix]] = recojetscl[ix][1][jet1] ;
+        pfjetSFdn[ix][npfjets[ix]] = recojetscl[ix][2][jet1] ;
+	
+	pfjetSF_sjer[ix][npfjets[ix]] = recojetsjer[ix][0][jet1] ;
+	pfjetSF_rjer[ix][npfjets[ix]] = recojetrjer[ix][0][jet1] ;
+	pfjetSF_matchgen[ix][npfjets[ix]] = recojetgenid[ix][0][jet1] ;
+	}	
+    
+	if (++npfjets[ix] >=njetmx) break;
+ 
+   }//jet1
+  }//PFJet[ix].isValid
+ 
+    if (isMC) {
+      
+      ngenjets[ix] = 0;
+//     iEvent.getByToken(tok_genjets_[ix], GenJets[ix]);
+ 
+      if (GenJets[ix].isValid()) {
+	
+		for (unsigned jet = 0; jet<GenJets[ix]->size(); jet++) {
+		
+		HepLorentzVector genjet4v((*GenJets[ix])[jet].px(),(*GenJets[ix])[jet].py(),(*GenJets[ix])[jet].pz(), (*GenJets[ix])[jet].energy());
+		
+		double tmpgenpt = genjet4v.perp();
+	//  double tmpgeneta = genjet4v.eta();
+		double tmpgeny = genjet4v.rapidity();
+	
+		genjetmom[ix][ngenjets[ix]] = genjet4v.rho() ;
+		genjetpT[ix][ngenjets[ix]] = genjet4v.perp() ;
+		genjetenr[ix][ngenjets[ix]] = genjet4v.e() ;
+		genjetthe[ix][ngenjets[ix]] = genjet4v.theta();
+		genjety[ix][ngenjets[ix]] = genjet4v.rapidity();
+		genjetphi[ix][ngenjets[ix]]= genjet4v.phi();
+		genjetpz[ix][ngenjets[ix]] = genjet4v.pz();
+		genjetarea[ix][ngenjets[ix]] = (*GenJets[ix])[jet].jetArea() ;
+	  
+	    if (++ngenjets[ix] >=njetmx) break;
+		  }
+	   }
+	} //isMC
+	
+ } //for(int ix=0 ; ix<nalgo ; ++ix) 
+ 
+   //Trigger
+ 
+  vector<triggervar> alltrgobj;
+ 
+  if (trigRes.isValid() && isReconstruct) { 
+  
+    const char* variab2 ;
+ 
+   alltrgobj.clear(); 
+   
+    const edm::TriggerNames &names = iEvent.triggerNames(*trigRes);
+    for (pat::TriggerObjectStandAlone obj : *triggerObjects) {
+   
+      obj.unpackPathNames(names);
+      std::vector<std::string> pathNamesAll  = obj.pathNames(false);
+      
+      for (unsigned ih = 0, n = pathNamesAll.size(); ih < n; ++ih) {
+		variab2 = pathNamesAll[ih].c_str(); 
+      
+			for (int jk=0; jk<nHLTmx; jk++) {
+				
+				if (strstr(variab2,jethlt_name[jk]) && (strlen(variab2)-strlen(jethlt_name[jk])<5)) {
+	   
+					triggervar tmpvec1;
+				//	cout<<jethlt_name[jk]<<" trig pt "<<obj.pt()<<endl;
+	   /*    GMA*/  if( obj.pt()<jethlt_thr[jk] ) continue;
+					if(obj.pt()>10) {
+						tmpvec1.both = obj.hasPathName( pathNamesAll[ih], true, true );
+						tmpvec1.highl  = obj.hasPathName( pathNamesAll[ih], false, true );
+						tmpvec1.level1 = obj.hasPathName( pathNamesAll[ih], true, false );
+						tmpvec1.trg4v = HepLorentzVector(obj.px(), obj.py(), obj.pz(), obj.energy());
+						tmpvec1.prescl = 1;                         //triggerPrescales->getPrescaleForIndex(ij);
+						tmpvec1.ihlt = jk;
+						alltrgobj.push_back(tmpvec1);
+						}
+					}
+				}//jk 
+		}//ih
+	}
+  } //if (trigRes.isValid() && isReconstruct)
+  
+  for(int ix=0 ; ix<nalgo; ++ix) {
+    if ((npfjets[ix]==2) || ((npfjets[ix]>2 && pfjetpT[ix][2]<50.0)&&(abs(pfjetphi[ix][0]-pfjetphi[ix][1])>2.*M_PI/3.))) {
+      int ijet = int(2*gRandom->Uniform())%2;
+      int ijet2 = (ijet==0) ? 1 : 0;
+
+      double px[2], py[2], pz[2], ee[2];
+      for (int ij=0; ij<2; ij++) { 
+        px[ij] = pfjetmom[ix][ij] * sin(pfjetthe[ix][ij])*cos(pfjetphi[ix][ij]);
+		py[ij] = pfjetmom[ix][ij] * sin(pfjetthe[ix][ij])*sin(pfjetphi[ix][ij]);
+		pz[ij] = pfjetmom[ix][ij] * cos(pfjetthe[ix][ij]);
+		ee[ij] =  pfjetenr[ix][ij];
+		}
+      
+      HepLorentzVector tagjet4v(px[ijet], py[ijet], pz[ijet], ee[ijet]);
+      HepLorentzVector probjet4v(px[ijet2], py[ijet2], pz[ijet2], ee[ijet2]);
+  
+	  double probjet_eta = abs(theta_to_eta(probjet4v.theta())) ;
+      int tj_etatag = getbinid(probjet_eta,netarange,etarng) ;
+    
+      if(tj_etatag<0) continue; 
+     
+      for (unsigned ij=0; ij<alltrgobj.size(); ij++) {
+		HepLorentzVector trigger4v = alltrgobj[ij].trg4v;
+		int ixhlt = -1;
+		int tmphlt = alltrgobj[ij].ihlt;
+	 
+		if( trigger4v.perp()<jethlt_thr[tmphlt]) continue;
+	//      bool isBoth=alltrgobj[ij].both;
+			bool isLF =alltrgobj[ij].level1;
+			bool isL3 =alltrgobj[ij].highl;
+			
+			double angle = deltaR(tagjet4v, trigger4v);
+		if (isLF) { 
+			trgjet_angle[ix][tmphlt][tj_etatag][0]->Fill(angle);
+			trgjet_2dangle[ix][tmphlt][tj_etatag][0]->Fill(trigger4v.perp(), angle);	
+			}
+		if (isL3) { 
+			trgjet_angle[ix][tmphlt][tj_etatag][1]->Fill(angle);
+			trgjet_2dangle[ix][tmphlt][tj_etatag][1]->Fill(trigger4v.perp(), angle);		
+			}	
+	// bool tag=false;
+		if (deltaR(tagjet4v, trigger4v)<0.2) {
+			ixhlt = alltrgobj[ij].ihlt;
+			
+	  if (isLF)  {
+	    //        if (isLF && !isBoth)  {
+				trgjet_pt[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.perp());
+				trgjet_eta[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.eta());
+				trgjet_phi[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.phi());
+				 }
+	  if (isL3) {
+	    // if (isLF && !isBoth)  {
+				trgjet_pt[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.perp());
+				trgjet_eta[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.eta());
+				trgjet_phi[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.phi());
+				}
+	  
+	  for (unsigned jk=0; jk<alltrgobj.size(); jk++) {
+	    if (ij==jk || alltrgobj[jk].ihlt !=ixhlt) continue;
+
+	    HepLorentzVector trigprbjet4v = alltrgobj[jk].trg4v;
+	    if( trigprbjet4v.perp()<jethlt_thr[ixhlt] ) continue;
+	    double angle1 = deltaR(probjet4v, trigprbjet4v);
+	    
+	    if (isLF && angle1<0.5 ) {
+	      prbjet_pt[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.perp());
+	      prbjet_eta[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.eta());
+	      prbjet_phi[ix][ixhlt][tj_etatag][0]->Fill(probjet4v.phi());
+	      isLF = false;
+	    }
+	    
+	    if (isL3 && angle1<0.5) {
+	    
+	      prbjet_pt[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.perp());
+	      prbjet_eta[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.eta());
+	      prbjet_phi[ix][ixhlt][tj_etatag][1]->Fill(probjet4v.phi());
+	      isL3 = false;
+	    }
+	    
+	    if ((!isL3) && (!isLF)) continue;
+	    
+	  } //for (unsigned jk=0; jk<alltrgobj.size(); jk++) 
+	} //if (deltaR(tagjet4v, trigger4v)<0.2)
+	if (ixhlt>=0) continue;
+      } //for (int ij=0; ij<alltrgobj.size(); ij++)
+    }
+  }
